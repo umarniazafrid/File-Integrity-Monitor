@@ -1,0 +1,148 @@
+#include <iostream>
+#include <fstream>
+#include <filesystem>
+#include <map>
+#include <string>
+
+// Crypto++ includes
+#include <cryptopp/sha.h>
+#include <cryptopp/hex.h>
+#include <cryptopp/files.h>
+#include <cryptopp/filters.h>
+
+namespace fs = std::filesystem;
+
+// global baseline map (filePath -> hash)
+std::map<std::string, std::string> baselineMap;
+
+// -------- Hashing function ----------
+std::string calculateFileHash(const std::string& filePath) {
+    std::string digest;
+    CryptoPP::SHA256 hash;
+
+    try {
+        CryptoPP::FileSource fileSource(
+            filePath.c_str(),
+            true,
+            new CryptoPP::HashFilter(
+                hash,
+                new CryptoPP::HexEncoder(
+                    new CryptoPP::StringSink(digest),
+                    false // lowercase hex
+                )
+            )
+        );
+    } catch (const std::exception& e) {
+        std::cerr << "Error hashing file: " << filePath 
+                  << " - " << e.what() << std::endl;
+        return "";
+    }
+    return digest;
+}
+
+// -------- Baseline creation ----------
+void createBaseline(const std::string& targetDirectory) {
+    std::cout << "[+] Creating baseline for: " << targetDirectory << std::endl;
+
+    try {
+        for (const auto& entry : fs::recursive_directory_iterator(targetDirectory)) {
+            if (entry.is_regular_file()) {
+                std::string filePath = entry.path().string();
+                std::string fileHash = calculateFileHash(filePath);
+
+                if (!fileHash.empty()) {
+                    baselineMap[filePath] = fileHash;
+                    std::cout << "  -> Hashed: " << filePath << std::endl;
+                }
+            }
+        }
+    } catch (const std::exception& e) {
+        std::cerr << "[-] Error scanning directory: " << e.what() << std::endl;
+        return;
+    }
+
+    std::ofstream baselineFile("baseline.txt");
+    if (baselineFile.is_open()) {
+        for (const auto& [filePath, fileHash] : baselineMap) {
+            baselineFile << filePath << " : " << fileHash << std::endl;
+        }
+        baselineFile.close();
+        std::cout << "[+] Baseline created successfully in 'baseline.txt'. "
+                  << baselineMap.size() << " files recorded." << std::endl;
+    } else {
+        std::cerr << "[-] Error: Could not open baseline.txt for writing!" << std::endl;
+    }
+}
+
+// -------- Monitoring for changes ----------
+void monitorChanges(const std::string& baselineFilePath) {
+    std::cout << "[+] Monitoring started. Reading baseline..." << std::endl;
+
+    std::ifstream baselineFile(baselineFilePath);
+    if (!baselineFile.is_open()) {
+        std::cerr << "[-] Error: Could not open baseline file: " 
+                  << baselineFilePath << std::endl;
+        return;
+    }
+
+    // reload baseline
+    std::string line;
+    while (std::getline(baselineFile, line)) {
+        size_t delimiterPos = line.find(" : ");
+        if (delimiterPos != std::string::npos) {
+            std::string filePath = line.substr(0, delimiterPos);
+            std::string originalHash = line.substr(delimiterPos + 3);
+            baselineMap[filePath] = originalHash;
+        }
+    }
+    baselineFile.close();
+
+    std::cout << "[+] Baseline loaded. " << baselineMap.size() << " files to check." << std::endl;
+
+    // check files
+    for (const auto& [filePath, originalHash] : baselineMap) {
+        if (!fs::exists(filePath)) {
+            std::cout << "\n[!] ALERT: File deleted -> " << filePath << std::endl;
+            continue;
+        }
+
+        std::string currentHash = calculateFileHash(filePath);
+
+        if (currentHash.empty()) {
+            std::cout << "\n[!] ALERT: Could not access file -> " << filePath << std::endl;
+        } else if (currentHash != originalHash) {
+            std::cout << "\n[!] ALERT: File modified -> " << filePath << std::endl;
+            std::cout << "    Old Hash: " << originalHash << std::endl;
+            std::cout << "    New Hash: " << currentHash << std::endl;
+        } else {
+            std::cout << "." << std::flush; // progress indicator
+        }
+    }
+    std::cout << "\n[+] Monitoring complete." << std::endl;
+}
+
+// -------- Main driver ----------
+int main(int argc, char* argv[]) {
+    std::cout << "\n=== Simple File Integrity Monitor (FIM) ===\n" << std::endl;
+
+    if (argc < 3) {
+        std::cerr << "Usage: " << std::endl;
+        std::cerr << "  " << argv[0] << " -b <directory>    (Create baseline)" << std::endl;
+        std::cerr << "  " << argv[0] << " -c <baseline.txt> (Check for changes)" << std::endl;
+        return 1;
+    }
+
+    std::string mode = argv[1];
+    std::string path = argv[2];
+
+    if (mode == "-b") {
+        createBaseline(path);
+    } else if (mode == "-c") {
+        monitorChanges(path);
+    } else {
+        std::cerr << "[-] Invalid mode. Use -b or -c." << std::endl;
+        return 1;
+    }
+
+    return 0;
+}

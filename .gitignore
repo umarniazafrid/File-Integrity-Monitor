@@ -1,0 +1,22 @@
+# Compiled object files and executables
+*.o
+*.a
+*.so
+*.obj
+*.exe
+fim
+fim.exe
+
+# Generated Baseline File - DO NOT UPLOAD THIS!
+baseline.txt
+
+# Build directories
+build/
+bin/
+obj/
+
+# Editor and IDE files
+.vscode/
+.idea/
+*.swp
+*~
